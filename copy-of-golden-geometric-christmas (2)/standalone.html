@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Golden Geometric Christmas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #050505; touch-action: none; }
+        .font-serif-custom { font-family: 'Playfair Display', serif; }
+    </style>
+    <!-- Import Map for Dependencies -->
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+            "three": "https://esm.sh/three@0.160.0",
+            "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.14?external=react,react-dom,three",
+            "@react-three/drei": "https://esm.sh/@react-three/drei@9.99.0?external=react,react-dom,three,@react-three/fiber",
+            "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+            "lucide-react": "https://esm.sh/lucide-react@0.300.0?external=react,react-dom",
+            "three/examples/jsm/geometries/TextGeometry": "https://esm.sh/three@0.160.0/examples/jsm/geometries/TextGeometry?external=three",
+            "three/examples/jsm/loaders/FontLoader": "https://esm.sh/three@0.160.0/examples/jsm/loaders/FontLoader?external=three"
+        }
+    }
+    </script>
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module" data-presets="typescript,react">
+        import React, { useState, useEffect, useRef, useMemo } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useLoader } from '@react-three/fiber';
+        import { OrbitControls, Environment, ContactShadows, Stars, Sparkles } from '@react-three/drei';
+        import { EffectComposer, Bloom } from '@react-three/postprocessing';
+        import { Volume2, VolumeX } from 'lucide-react';
+        import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry';
+        import { FontLoader, Font } from 'three/examples/jsm/loaders/FontLoader';
+
+        // --- TYPES ---
+        enum AppState {
+            TREE = 0,
+            EXPLODED = 1,
+            TEXT = 2
+        }
+
+        // --- CONSTANTS ---
+        const TOTAL_PARTICLES = 6000;
+        const SPHERE_COUNT = 3500; 
+        const COLOR_GOLD = "#FFD700";
+        const COLOR_RED = "#D41C2C";
+        const COLOR_GREEN = "#1A5228";
+        const COLOR_DEEP_GREEN = "#0F3015";
+        const FONT_URL = 'https://threejs.org/examples/fonts/helvetiker_bold.typeface.json';
+        const MUSIC_URL = 'https://cdn.pixabay.com/download/audio/2020/12/24/audio_3490795c64.mp3?filename=christmas-background-music-12828.mp3';
+        const INTERACTION_SOUND_URL = 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_17a4c73171.mp3?filename=magic-glitter-6202.mp3';
+
+        // --- UTILS ---
+        const generateTreePositions = (count) => {
+            const data = new Float32Array(count * 3);
+            const height = 12;
+            const maxRadius = 5;
+
+            for (let i = 0; i < count; i++) {
+                const yNorm = Math.pow(Math.random(), 0.8); 
+                const y = 6 - (yNorm * height); 
+                const r = yNorm * maxRadius * Math.sqrt(Math.random()); 
+                const theta = i * 0.5 + Math.random() * Math.PI * 2; 
+                const x = r * Math.cos(theta);
+                const z = r * Math.sin(theta);
+                data[i * 3] = x;
+                data[i * 3 + 1] = y;
+                data[i * 3 + 2] = z;
+            }
+            return data;
+        };
+
+        const generateExplosionPositions = (count) => {
+            const data = new Float32Array(count * 3);
+            const radius = 15;
+            for (let i = 0; i < count; i++) {
+                const r = radius * Math.cbrt(Math.random());
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+                const x = r * Math.sin(phi) * Math.cos(theta);
+                const y = r * Math.sin(phi) * Math.sin(theta);
+                const z = r * Math.cos(phi);
+                data[i * 3] = x;
+                data[i * 3 + 1] = y;
+                data[i * 3 + 2] = z;
+            }
+            return data;
+        };
+
+        // Helper: Calculate total area and cumulative weights for a geometry
+        const analyzeGeometry = (geometry) => {
+            const posAttribute = geometry.attributes.position;
+            const faceCount = posAttribute.count / 3;
+            const weights = new Float32Array(faceCount);
+            let totalArea = 0;
+
+            const vA = new THREE.Vector3();
+            const vB = new THREE.Vector3();
+            const vC = new THREE.Vector3();
+            const tempVecA = new THREE.Vector3();
+            const tempVecB = new THREE.Vector3();
+
+            for (let i = 0; i < faceCount; i++) {
+                const i0 = i * 3;
+                const i1 = i * 3 + 1;
+                const i2 = i * 3 + 2;
+
+                vA.fromBufferAttribute(posAttribute, i0);
+                vB.fromBufferAttribute(posAttribute, i1);
+                vC.fromBufferAttribute(posAttribute, i2);
+
+                tempVecA.subVectors(vB, vA);
+                tempVecB.subVectors(vC, vA);
+                tempVecA.cross(tempVecB);
+                
+                const area = 0.5 * tempVecA.length();
+                totalArea += area;
+                weights[i] = totalArea;
+            }
+            return { weights, totalArea, faceCount, posAttribute };
+        };
+
+        // Helper: Sample a point from a specific geometry info
+        const samplePoint = (info, target, index) => {
+            const r = Math.random() * info.totalArea;
+            
+            // Binary search for face
+            let lower = 0;
+            let upper = info.faceCount - 1;
+            let faceIndex = 0;
+
+            while (lower <= upper) {
+                const mid = Math.floor((lower + upper) / 2);
+                if (info.weights[mid] < r) {
+                    lower = mid + 1;
+                } else {
+                    upper = mid - 1;
+                    faceIndex = mid;
+                }
+            }
+
+            const i0 = faceIndex * 3;
+            const i1 = faceIndex * 3 + 1;
+            const i2 = faceIndex * 3 + 2;
+
+            const vA = new THREE.Vector3().fromBufferAttribute(info.posAttribute, i0);
+            const vB = new THREE.Vector3().fromBufferAttribute(info.posAttribute, i1);
+            const vC = new THREE.Vector3().fromBufferAttribute(info.posAttribute, i2);
+
+            let r1 = Math.random();
+            let r2 = Math.random();
+            if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+            const r3 = 1 - r1 - r2;
+
+            target[index * 3] = vA.x * r1 + vB.x * r2 + vC.x * r3;
+            target[index * 3 + 1] = vA.y * r1 + vB.y * r2 + vC.y * r3;
+            target[index * 3 + 2] = vA.z * r1 + vB.z * r2 + vC.z * r3;
+        }
+
+        const generateTextPositions = (font, count) => {
+            // Create Top Line
+            const geoTop = new TextGeometry('Dear Liana', {
+                font: font, size: 1.3, depth: 0.04, curveSegments: 6, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.005, bevelSegments: 2
+            });
+            geoTop.center();
+            geoTop.translate(0, 1.2, 0); 
+
+            // Create Bottom Line
+            const geoBottom = new TextGeometry('MERRY CHRISTMAS', {
+                font: font, size: 1.3, depth: 0.04, curveSegments: 6, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.005, bevelSegments: 2
+            });
+            geoBottom.center();
+            geoBottom.translate(0, -1.2, 0); 
+
+            // Analyze both
+            const infoTop = analyzeGeometry(geoTop);
+            const infoBottom = analyzeGeometry(geoBottom);
+
+            const totalCombinedArea = infoTop.totalArea + infoBottom.totalArea;
+            const data = new Float32Array(count * 3);
+
+            for (let i = 0; i < count; i++) {
+                if (Math.random() < (infoTop.totalArea / totalCombinedArea)) {
+                    samplePoint(infoTop, data, i);
+                } else {
+                    samplePoint(infoBottom, data, i);
+                }
+            }
+            return data;
+        }
+
+        // --- COMPONENTS ---
+        
+        const SpiralEffect = ({ appState }) => {
+            const meshRef = useRef(null);
+            const count = 500; // Increased count for "magic dust" feel
+
+            // Generate random properties for each particle
+            const particles = useMemo(() => {
+                const temp = [];
+                for (let i = 0; i < count; i++) {
+                temp.push({
+                    // Start randomly along the height
+                    yPhase: Math.random() * 14, 
+                    // Speed of ascent (slower for floating feel)
+                    speed: 0.2 + Math.random() * 0.4,
+                    // Radius offset to make it a thick band
+                    radiusOffset: Math.random() * 1.0,
+                    // Starting angle
+                    anglePhase: Math.random() * Math.PI * 2,
+                    // Rotation speed specific to particle (varied for natural look)
+                    rotSpeed: 0.5 + Math.random() * 0.5,
+                    // Base scale (Very small for magic particle look)
+                    scale: 0.01 + Math.random() * 0.025
+                });
+                }
+                return temp;
+            }, []);
+
+            const dummy = new THREE.Object3D();
+
+            useFrame((state) => {
+                if (!meshRef.current) return;
+                const time = state.clock.elapsedTime;
+                const isTree = appState === AppState.TREE;
+                
+                let i = 0;
+                for (const p of particles) {
+                    // Calculate Y position: Loop from -7 to 7
+                    // We want particles to rise up.
+                    const loopH = (p.yPhase + time * p.speed) % 14; 
+                    let y = loopH - 7; 
+
+                    // Dimensions based on Tree
+                    // Tree is roughly y=6 (top) to y=-6 (bottom)
+                    
+                    // Calculate geometric radius at this height to conform to cone
+                    const hClamped = Math.max(-6, Math.min(6, y));
+                    // Normalized: 1.0 at bottom (-6), 0.0 at top (6)
+                    const heightFactor = (6 - hClamped) / 12; 
+                    
+                    const baseRadius = heightFactor * 6.5; // Slightly wider than tree
+                    const r = baseRadius + 0.5 + p.radiusOffset; 
+
+                    // Spiral motion (Rotating around)
+                    const angle = p.anglePhase + time * p.rotSpeed; 
+
+                    const x = Math.cos(angle) * r;
+                    const z = Math.sin(angle) * r;
+
+                    dummy.position.set(x, y, z);
+                    
+                    // Scale Logic
+                    let s = p.scale;
+                    
+                    // Fade out at top and bottom edges smoothly
+                    if (y > 4) s *= Math.max(0, (7 - y) / 3); 
+                    if (y < -5) s *= Math.max(0, (y + 7) / 2);
+
+                    // Hide if not tree state
+                    if (!isTree) {
+                        s = 0;
+                    } else {
+                        // Twinkle effect (Magic sparkle)
+                        // Fast flicker
+                        s *= (0.6 + 0.4 * Math.sin(time * 10 + i * 132));
+                    }
+
+                    dummy.scale.setScalar(s);
+                    dummy.updateMatrix();
+                    meshRef.current.setMatrixAt(i, dummy.matrix);
+                    i++;
+                }
+                meshRef.current.instanceMatrix.needsUpdate = true;
+            });
+
+            return (
+                <instancedMesh ref={meshRef} args={[undefined, undefined, count]}>
+                    <sphereGeometry args={[1, 6, 6]} /> {/* Low poly sphere is fine for dots */}
+                    <meshBasicMaterial 
+                        color="#FFFFFF" // White magic particles
+                        transparent 
+                        opacity={0.9} 
+                        blending={THREE.AdditiveBlending} 
+                        depthWrite={false} 
+                        toneMapped={false} // Make them bright/glowing
+                    />
+                </instancedMesh>
+            );
+        };
+
+        const MagicParticles = ({ appState }) => {
+            const font = useLoader(FontLoader, FONT_URL);
+            const spheresRef = useRef(null);
+            const cubesRef = useRef(null);
+            const [targetPositions, setTargetPositions] = useState(null);
+            const textStateStartTime = useRef(0);
+            const isTransitioningToText = useRef(false);
+
+            const { treePos, explodePos, textPos } = useMemo(() => {
+                if (!font) return { treePos: new Float32Array(), explodePos: new Float32Array(), textPos: new Float32Array() };
+                return {
+                    treePos: generateTreePositions(TOTAL_PARTICLES),
+                    explodePos: generateExplosionPositions(TOTAL_PARTICLES),
+                    textPos: generateTextPositions(font, TOTAL_PARTICLES)
+                };
+            }, [font]);
+
+            const colors = useMemo(() => {
+                const cSpheres = new Float32Array(SPHERE_COUNT * 3);
+                const cCubes = new Float32Array((TOTAL_PARTICLES - SPHERE_COUNT) * 3);
+                const color = new THREE.Color();
+
+                for (let i = 0; i < SPHERE_COUNT; i++) {
+                    if (Math.random() > 0.3) color.set(COLOR_GOLD);
+                    else color.set(COLOR_RED);
+                    color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.1);
+                    cSpheres[i * 3] = color.r;
+                    cSpheres[i * 3 + 1] = color.g;
+                    cSpheres[i * 3 + 2] = color.b;
+                }
+
+                for (let i = 0; i < TOTAL_PARTICLES - SPHERE_COUNT; i++) {
+                    if (Math.random() > 0.5) color.set(COLOR_GOLD);
+                    else if (Math.random() > 0.5) color.set(COLOR_GREEN);
+                    else color.set(COLOR_DEEP_GREEN);
+                    color.offsetHSL(0, 0, (Math.random() - 0.5) * 0.1);
+                    cCubes[i * 3] = color.r;
+                    cCubes[i * 3 + 1] = color.g;
+                    cCubes[i * 3 + 2] = color.b;
+                }
+                return { spheres: cSpheres, cubes: cCubes };
+            }, []);
+
+            useEffect(() => {
+                if (!font) return;
+                switch (appState) {
+                    case AppState.TREE: setTargetPositions(treePos); break;
+                    case AppState.EXPLODED: setTargetPositions(explodePos); break;
+                    case AppState.TEXT: 
+                        setTargetPositions(textPos); 
+                        isTransitioningToText.current = true;
+                        break;
+                }
+            }, [appState, font, treePos, explodePos, textPos]);
+
+            const currentPositions = useRef(new Float32Array(TOTAL_PARTICLES * 3));
+            
+            useEffect(() => {
+                if (treePos.length > 0 && currentPositions.current[0] === 0) {
+                    currentPositions.current.set(treePos);
+                }
+            }, [treePos]);
+
+            const currentScales = useRef({ sphere: 0.25, cube: 0.22 });
+
+            useFrame((state, delta) => {
+                if (!spheresRef.current || !cubesRef.current || !targetPositions) return;
+
+                if (appState === AppState.TEXT && isTransitioningToText.current) {
+                    textStateStartTime.current = state.clock.elapsedTime;
+                    isTransitioningToText.current = false;
+                }
+
+                const dummy = new THREE.Object3D();
+                const lerpSpeed = 4 * delta; 
+                const time = state.clock.elapsedTime;
+
+                // Smoothly transition scales
+                const isTextState = appState === AppState.TEXT;
+                const targetSphereScale = isTextState ? 0.035 : 0.20;
+                const targetCubeScale = isTextState ? 0.03 : 0.18;
+
+                currentScales.current.sphere = THREE.MathUtils.lerp(currentScales.current.sphere, targetSphereScale, lerpSpeed);
+                currentScales.current.cube = THREE.MathUtils.lerp(currentScales.current.cube, targetCubeScale, lerpSpeed);
+
+                let i = 0;
+
+                const updateParticle = (idx, baseScale, meshMain, instanceId, rotationFactor) => {
+                    currentPositions.current[idx] = THREE.MathUtils.lerp(currentPositions.current[idx], targetPositions[idx], lerpSpeed);
+                    currentPositions.current[idx+1] = THREE.MathUtils.lerp(currentPositions.current[idx+1], targetPositions[idx+1], lerpSpeed);
+                    currentPositions.current[idx+2] = THREE.MathUtils.lerp(currentPositions.current[idx+2], targetPositions[idx+2], lerpSpeed);
+
+                    let finalScale = baseScale;
+
+                    if (isTextState) {
+                        const age = time - textStateStartTime.current;
+                        const targetX = targetPositions[idx];
+                        
+                        // Ripple Animation
+                        const wavePos = age * 12 - 15;
+                        const distToWave = Math.abs(targetX - wavePos);
+                        
+                        if (age < 3.5) {
+                            const rippleIntensity = Math.max(0, 1 - distToWave * 0.4); 
+                            finalScale += rippleIntensity * (baseScale * 2.0); 
+                        }
+
+                        // Subtle Pulse
+                        const pulse = Math.sin(time * 2 + targetX * 0.5);
+                        finalScale += pulse * (baseScale * 0.3);
+
+                    } else {
+                        const breatheAmp = 0.05;
+                        const breathing = Math.sin(time * 2 + i) * breatheAmp;
+                        finalScale += breathing;
+                    }
+
+                    const rotX = time * rotationFactor + i;
+                    const rotY = time * (rotationFactor * 0.5) + i;
+
+                    dummy.position.set(currentPositions.current[idx], currentPositions.current[idx+1], currentPositions.current[idx+2]);
+                    dummy.rotation.set(rotX, rotY, 0);
+                    dummy.scale.setScalar(finalScale);
+                    dummy.updateMatrix();
+                    meshMain.setMatrixAt(instanceId, dummy.matrix);
+                };
+
+                for (let j = 0; j < SPHERE_COUNT; j++) {
+                    updateParticle(i * 3, currentScales.current.sphere, spheresRef.current, j, 0.2);
+                    i++;
+                }
+
+                const cubeCount = TOTAL_PARTICLES - SPHERE_COUNT;
+                for (let j = 0; j < cubeCount; j++) {
+                    updateParticle(i * 3, currentScales.current.cube, cubesRef.current, j, 0.5);
+                    i++;
+                }
+
+                spheresRef.current.instanceMatrix.needsUpdate = true;
+                cubesRef.current.instanceMatrix.needsUpdate = true;
+            });
+
+            useEffect(() => {
+                if (spheresRef.current && cubesRef.current) {
+                    for (let i = 0; i < SPHERE_COUNT; i++) {
+                        spheresRef.current.setColorAt(i, new THREE.Color(colors.spheres[i*3], colors.spheres[i*3+1], colors.spheres[i*3+2]));
+                    }
+                    for (let i = 0; i < TOTAL_PARTICLES - SPHERE_COUNT; i++) {
+                        cubesRef.current.setColorAt(i, new THREE.Color(colors.cubes[i*3], colors.cubes[i*3+1], colors.cubes[i*3+2]));
+                    }
+                    spheresRef.current.instanceColor.needsUpdate = true;
+                    cubesRef.current.instanceColor.needsUpdate = true;
+                }
+            }, [colors]);
+
+            return (
+                <group>
+                    <instancedMesh ref={spheresRef} args={[undefined, undefined, SPHERE_COUNT]}>
+                        <sphereGeometry args={[1, 16, 16]} />
+                        <meshStandardMaterial metalness={0.9} roughness={0.15} envMapIntensity={1.5} />
+                    </instancedMesh>
+                    <instancedMesh ref={cubesRef} args={[undefined, undefined, TOTAL_PARTICLES - SPHERE_COUNT]}>
+                        <boxGeometry args={[1, 1, 1]} />
+                        <meshStandardMaterial metalness={0.8} roughness={0.2} envMapIntensity={1.2} />
+                    </instancedMesh>
+                </group>
+            );
+        };
+
+        const TreeTopper = ({ appState }) => {
+            const meshRef = useRef(null);
+            const lightRef = useRef(null);
+
+            const starGeometry = useMemo(() => {
+                const shape = new THREE.Shape();
+                const points = 5;
+                const outerRadius = 0.9; 
+                const innerRadius = 0.45;
+                for (let i = 0; i < points * 2; i++) {
+                    const angle = (i * Math.PI) / points + Math.PI / 2;
+                    const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                    const x = Math.cos(angle) * radius;
+                    const y = Math.sin(angle) * radius;
+                    if (i === 0) shape.moveTo(x, y);
+                    else shape.lineTo(x, y);
+                }
+                shape.closePath();
+                const geometry = new THREE.ExtrudeGeometry(shape, {
+                    depth: 0.2, bevelEnabled: true, bevelThickness: 0.2, bevelSize: 0.1, bevelSegments: 3
+                });
+                geometry.computeBoundingBox();
+                if (geometry.boundingBox) {
+                    const zCenter = (geometry.boundingBox.max.z + geometry.boundingBox.min.z) / 2;
+                    geometry.translate(0, 0, -zCenter);
+                }
+                return geometry;
+            }, []);
+
+            useFrame((state) => {
+                if (!meshRef.current || !lightRef.current) return;
+                const time = state.clock.elapsedTime;
+                meshRef.current.rotation.y = time * 0.5;
+                meshRef.current.rotation.z = 0; 
+                meshRef.current.rotation.x = 0;
+                const targetScale = appState === AppState.TREE ? 1 : 0;
+                const currentScale = meshRef.current.scale.x;
+                const lerpScale = THREE.MathUtils.lerp(currentScale, targetScale, 0.1);
+                meshRef.current.scale.setScalar(lerpScale);
+                const twinkle = Math.sin(time * 3) * 0.3 + 0.1;
+                const targetLightIntensity = appState === AppState.TREE ? 2 + twinkle : 0;
+                lightRef.current.intensity = THREE.MathUtils.lerp(lightRef.current.intensity, targetLightIntensity, 0.1);
+                const material = meshRef.current.material;
+                if (material) {
+                    const targetEmissive = appState === AppState.TREE ? 0.6 + (twinkle * 0.5) : 0;
+                    material.emissiveIntensity = THREE.MathUtils.lerp(material.emissiveIntensity, targetEmissive, 0.1);
+                }
+            });
+
+            return (
+                <group position={[0, 6.2, 0]}>
+                    <mesh ref={meshRef} geometry={starGeometry}>
+                        <meshStandardMaterial color="#FFD700" emissive="#FFD700" emissiveIntensity={0.6} metalness={1.0} roughness={0.2} />
+                    </mesh>
+                    <pointLight ref={lightRef} color="#FFD700" distance={8} decay={2} />
+                </group>
+            );
+        };
+
+        const RotatingGroup = ({ children }) => {
+            const groupRef = useRef(null);
+            useFrame((state, delta) => {
+                if (groupRef.current) {
+                    groupRef.current.rotation.y += delta * 0.1;
+                }
+            });
+            return <group ref={groupRef}>{children}</group>;
+        };
+
+        const BackgroundEnvironment = () => {
+            const groupRef = useRef(null);
+            useFrame((state, delta) => {
+                if (groupRef.current) {
+                // Slowly rotate the stars to create a feeling of a turning universe
+                // Different speed/axis than the tree for parallax feel
+                groupRef.current.rotation.y -= delta * 0.02; 
+                // Subtle wobbling on X
+                groupRef.current.rotation.x = Math.sin(state.clock.elapsedTime * 0.1) * 0.05;
+                }
+            });
+
+            return (
+                <group ref={groupRef}>
+                    <Stars radius={100} depth={50} count={5000} factor={4} saturation={0} fade speed={1} />
+                </group>
+            );
+        };
+
+        const MovingLight = () => {
+          const lightRef = useRef(null);
+          useFrame((state) => {
+            if (lightRef.current) {
+              const t = state.clock.elapsedTime * 0.5;
+              lightRef.current.position.x = Math.sin(t) * 12;
+              lightRef.current.position.z = Math.cos(t) * 12;
+              lightRef.current.position.y = Math.sin(t * 1.5) * 3 + 6; 
+            }
+          });
+          return <pointLight ref={lightRef} intensity={3} distance={25} decay={2} color="#fffebb" />;
+        };
+
+        const Scene = ({ appState }) => {
+            return (
+                <Canvas camera={{ position: [0, 0, 20], fov: 45 }} dpr={[1, 2]} gl={{ toneMapping: THREE.ReinhardToneMapping, toneMappingExposure: 1.5 }}>
+                    <color attach="background" args={['#050505']} />
+                    <fog attach="fog" args={['#050505', 15, 35]} />
+                    <ambientLight intensity={0.2} />
+                    <pointLight position={[10, 10, 10]} intensity={1} color="#ffaa00" />
+                    <spotLight position={[-10, 20, 10]} angle={0.3} penumbra={1} intensity={2} castShadow color="#ffeb3b" />
+                    
+                    <MovingLight />
+                    
+                    <BackgroundEnvironment />
+
+                    <RotatingGroup>
+                        <MagicParticles appState={appState} />
+                        <TreeTopper appState={appState} />
+                        <SpiralEffect appState={appState} />
+                    </RotatingGroup>
+
+                    <Sparkles count={200} scale={12} size={4} speed={0.4} opacity={0.5} color="#FFD700" />
+                    <Sparkles count={150} scale={15} size={2} speed={0.8} opacity={0.8} color="#FFFFFF" />
+
+                    <ContactShadows resolution={1024} scale={30} blur={2} opacity={0.5} far={10} color="#000000" />
+                    <Environment preset="city" />
+                    <EffectComposer enableNormalPass={false}>
+                        <Bloom luminanceThreshold={0.8} mipmapBlur intensity={1.8} radius={0.4} />
+                    </EffectComposer>
+                    <OrbitControls enablePan={false} minPolarAngle={0} maxPolarAngle={Math.PI / 1.5} minDistance={5} maxDistance={30} makeDefault />
+                </Canvas>
+            );
+        };
+
+        // --- APP ---
+        const App = () => {
+            const [appState, setAppState] = useState(AppState.TREE);
+            const [isPlaying, setIsPlaying] = useState(false);
+            const [hasInteracted, setHasInteracted] = useState(false);
+            const dragStart = useRef({ x: 0, y: 0, time: 0 });
+            const audioRef = useRef(null);
+            const interactionSoundRef = useRef(null);
+
+            useEffect(() => {
+                audioRef.current = new Audio(MUSIC_URL);
+                audioRef.current.loop = true;
+                audioRef.current.volume = 0.4;
+                
+                interactionSoundRef.current = new Audio(INTERACTION_SOUND_URL);
+                interactionSoundRef.current.volume = 0.6;
+
+                const playPromise = audioRef.current.play();
+                if (playPromise !== undefined) {
+                    playPromise.then(() => { setIsPlaying(true); setHasInteracted(true); })
+                        .catch(error => { console.log("Auto-play blocked", error); });
+                }
+                return () => { 
+                    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; } 
+                    if (interactionSoundRef.current) { interactionSoundRef.current = null; }
+                };
+            }, []);
+
+            const toggleAudio = () => {
+                if (!audioRef.current) return;
+                if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
+                else { audioRef.current.play().catch(e => console.warn(e)); setIsPlaying(true); }
+            };
+
+            const handleInteraction = () => {
+                if (!hasInteracted && audioRef.current) {
+                    setHasInteracted(true);
+                    if (!isPlaying) { audioRef.current.play().then(() => setIsPlaying(true)).catch(e => console.warn(e)); }
+                }
+            };
+
+            const handlePointerDown = (e) => { dragStart.current = { x: e.clientX, y: e.clientY, time: Date.now() }; };
+            const handlePointerUp = (e) => {
+                const dx = e.clientX - dragStart.current.x;
+                const dy = e.clientY - dragStart.current.y;
+                const dt = Date.now() - dragStart.current.time;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                if (dist < 20 && dt < 400) { handleSceneClick(); }
+            };
+
+            const handleSceneClick = () => {
+                handleInteraction();
+                
+                // Play magical chime sound
+                if (interactionSoundRef.current) {
+                    interactionSoundRef.current.currentTime = 0;
+                    interactionSoundRef.current.play().catch(e => console.warn("Interaction sound blocked", e));
+                }
+                
+                setAppState((prev) => {
+                    if (prev === AppState.TREE) return AppState.EXPLODED;
+                    if (prev === AppState.EXPLODED) return AppState.TEXT;
+                    return AppState.TREE;
+                });
+            };
+
+            return (
+                <div className="w-full h-screen relative bg-black select-none touch-none" onPointerDown={handlePointerDown} onPointerUp={handlePointerUp}>
+                    <div className="absolute top-0 left-0 w-full z-10 pointer-events-none p-8 flex flex-col items-center">
+                        <h1 className="text-4xl md:text-6xl text-[#D4AF37] font-serif-custom tracking-widest drop-shadow-[0_2px_10px_rgba(212,175,55,0.5)] text-center animate-pulse">
+                            MERRY CHRISTMAS
+                        </h1>
+                        <p className="text-[#D4AF37] text-sm mt-4 opacity-70 font-serif-custom tracking-widest uppercase">
+                            {appState === AppState.TREE && "Click to Unwrap the Magic"}
+                            {appState === AppState.EXPLODED && "Click to Reveal the Message"}
+                            {appState === AppState.TEXT && "Click to Rebuild the Tree"}
+                        </p>
+                    </div>
+                    <button onClick={(e) => { e.stopPropagation(); toggleAudio(); }} onPointerDown={(e) => e.stopPropagation()} className="absolute bottom-8 right-8 z-20 text-[#D4AF37] hover:text-white transition-colors bg-white/10 backdrop-blur-md p-3 rounded-full border border-[#D4AF37]/30 cursor-pointer pointer-events-auto">
+                        {isPlaying ? <Volume2 size={24} /> : <VolumeX size={24} />}
+                    </button>
+                    <div className="w-full h-full cursor-pointer">
+                        <Scene appState={appState} />
+                    </div>
+                    {!hasInteracted && !isPlaying && (
+                        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none">
+                            <div className="text-[#D4AF37] animate-bounce">Click anywhere to start</div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
